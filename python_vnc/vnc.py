@@ -3,6 +3,7 @@ import socket
 import re
 import struct
 import threading
+import ctypes
 from . import pydes
 
 class _VncReceiveThread(threading.Thread):
@@ -158,19 +159,28 @@ class Vnc(object):
         self.__receive_thread = None
 
     def encrypt(self, password, challenge):
-        key = password
+        if isinstance(password, bytes):
+            key = password
+        else:
+            key = password.encode("ascii")
+
+        if isinstance(challenge, bytes):
+            text = challenge
+        else:
+            text = challenge.encode("ascii")
+
         if len(key) < 8:
-            key += "\0" * (8 - len(key))
+            key += b"\0" * (8 - len(key))
+
         # Pre-process for RFB authentication
-        new_key = ""
-        for ch in key:
+        new_key = []
+        for ch in struct.unpack("8B", key):
             #              drop "0b" and reverse
-            new_ch = bin(ord(ch))[2:][::-1]
+            new_ch = bin(ch)[2:][::-1]
             if len(new_ch) < 8:
                 new_ch += "0" * (8 - len(new_ch))
-            new_key += chr(int(new_ch, 2))
-        text = challenge
-        return pydes.des().encrypt(new_key, text)
+            new_key.append(int(new_ch, 2))
+        return pydes.des(struct.pack("8B", *new_key)).encrypt(text)
 
     def send(self, packet):
         if self.__socket is None:
@@ -258,29 +268,24 @@ class Vnc(object):
 
     def read_rect(self):
         x, y, width, height, enc = struct.unpack(">HHHHl", self.recv(12))
-        if self.__big_endian_flag:
-            data_format = (">%d" % (width * height)) + self.__pixel_data_format
-        else:
-            data_format = ("<%d" % (width * height)) + self.__pixel_data_format
 
-        data_size = width * height * self.__bits_per_pixel / 8
-        image_data = struct.unpack(data_format, self.recv(data_size))
+        data = self.recv(width * height * self.__bits_per_pixel // 8)
 
-        image_matrix = [[None for _ in range(width)] for _ in range(height)]
-        for i in range(height):
-            for j in range(width):
-                index = i * width + j
-                pixel_data = image_data[index]
-                image_matrix[i][j] = ((pixel_data >> self.__red_shift) & self.__red_max,
-                                      (pixel_data >> self.__green_shift) & self.__green_max,
-                                      (pixel_data >> self.__blue_shift) & self.__blue_max)
+        fields = self.__ctypes_fields
+        class Pixel(self.__ctypes_base_class):
+            _fields_ = fields
+        class Parser(self.__ctypes_base_class):
+            _fields_ = [("pixel", Pixel * width * height)]
+        parser = Parser()
+        ctypes.memmove(ctypes.addressof(parser), data, len(data))
+        pixel = parser.pixel
+        image_matrix = [[(pixel_data.red, pixel_data.green, pixel_data.blue) for pixel_data in pixel_line] for pixel_line in pixel]
         self.update_rect(x, y, width, height, image_matrix)
 
     def update_rect(self, x, y, width, height, image_matrix):
         with self.__image_mutex:
             for i in range(height):
-                for j in range(width):
-                    self.__image[y + i][x + j] = image_matrix[i][j]
+                self.__image[y + i][x:(x + width)] = image_matrix[i]
 
     def receive_string(self):
         (reason_length, ) = struct.unpack(">L", self.recv(4))
@@ -306,43 +311,50 @@ class Vnc(object):
 
         self.__image = [[(0, 0, 0) for _ in range(w)] for _ in range(h)]
 
+        self.construct_parser()
+
+    def construct_parser(self):
+        members = sorted([("red", self.__red_shift, self.__red_max),
+                          ("green", self.__green_shift, self.__green_max),
+                          ("blue", self.__blue_shift, self.__blue_max)],
+                         key=lambda x: x[1])
+
         if self.__bits_per_pixel == 8:
-            self.__pixel_data_format = "B"
+            ctype = ctypes.c_byte
         elif self.__bits_per_pixel == 16:
-            self.__pixel_data_format = "H"
+            ctype = ctypes.c_uint16
         elif self.__bits_per_pixel == 32:
-            self.__pixel_data_format = "L"
+            ctype = ctypes.c_uint32
         else:
             raise RuntimeError("Unsupported bits-per-pixel")
 
-if __name__ == "__main__":
-    def encrypt(password, challenge):
-        key = password
-        if len(key) < 8:
-            key += "\0" * (8 - len(key))
-        # Pre-process for RFB authentication
-        new_key = ""
-        for ch in key:
-            #              drop "0b" and reverse
-            new_ch = bin(ord(ch))[2:][::-1]
-            if len(new_ch) < 8:
-                new_ch += "0" * (8 - len(new_ch))
-            new_key += chr(int(new_ch, 2))
-        text = challenge
-        return pydes.des().encrypt(new_key, text)
+        bit_count = {
+            0x01: 1,
+            0x03: 2,
+            0x07: 3,
+            0x0F: 4,
+            0x1F: 5,
+            0x3F: 6,
+            0x7F: 7,
+            0xFF: 8,
+            0x1FF: 9,
+            0x3FF: 10,
+            0x7FF: 11,
+            0xFFF: 12
+        }
 
-    challenge = struct.pack("16B", 0x90, 0x44, 0xde, 0x20, 0x9b, 0x1b, 0xb7, 0xbb, 0x96, 0x3, 0xad, 0xc, 0x48, 0x3f, 0x4a, 0x86)
-    result = encrypt("!QAZxsw2", challenge)
-    #print(map(lambda x: "%X" % x, struct.unpack("16B", result)))
-    #exit()
-    vnc = Vnc("localhost", 5900, "!QAZxsw2")
-    try:
-        vnc.connect()
-        image = vnc.capture_screen(False)
-        print(image[27][248])
-        image = vnc.capture_screen(False)
-        print(image[27][248])
-        image = vnc.capture_screen(False)
-        print(image[27][248])
-    finally:
-        vnc.close()
+        fields = []
+        bit = 0
+        for name, shift, max_value in members:
+            if shift != bit:
+                fields.append(("pad%d" % bit, ctype, shift - bit))
+            fields.append((name, ctype, bit_count[max_value]))
+            bit = shift + bit_count[max_value]
+        if bit != self.__bits_per_pixel:
+            fields.append(("pad%d" % bit, ctype, self.__bits_per_pixel - bit))
+        self.__ctypes_fields = fields
+
+        if self.__big_endian_flag:
+            self.__ctypes_base_class = ctypes.BigEndianStructure
+        else:
+            self.__ctypes_base_class = ctypes.LittleEndianStructure
