@@ -208,6 +208,18 @@ class Vnc(object):
             totalreceived += len(chunk)
         return received_data
 
+    def key_down(self, key):
+        self.key_event(key, 1)
+
+    def key_up(self, key):
+        self.key_event(key, 0)
+
+    def key_event(self, key, down):
+        if isinstance(key, str):
+            key = ord(key)
+        packet = struct.pack(">BBxxL", 4, down, key)
+        self.send(packet)
+
     def capture_screen(self, force_update=False):
         if force_update:
             self.update_whole_framebuffer(False)
@@ -244,7 +256,6 @@ class Vnc(object):
             if data is None:
                 break
             (message_type, ) = struct.unpack("B", data)
-            print("message: %d" % message_type)
             if message_type == self.SERVER_FRAMEBUFFER_UPDATE:
                 self.process_framebuffer_update()
             elif message_type == self.SERVER_SET_COLOUR_MAP_ENTRIES:
