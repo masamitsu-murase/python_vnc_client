@@ -30,6 +30,41 @@ class Vnc(object):
     SERVER_BELL = 2
     SERVER_SERVER_CUT_TEXT = 3
 
+    KEY_BACK_SPACE = 0xFF08
+    KEY_TAB = 0xFF09
+    KEY_RETURN = 0xFF0D
+    KEY_ESCAPE = 0xFF1B
+    KEY_INSERT = 0xFF63
+    KEY_DELETE = 0xFFFF
+    KEY_HOME = 0xFF50
+    KEY_END = 0xFF57
+    KEY_PAGE_UP = 0xFF55
+    KEY_PAGE_DOWN = 0xFF56
+    KEY_LEFT = 0xFF51
+    KEY_UP = 0xFF52
+    KEY_RIGHT = 0xFF53
+    KEY_DOWN = 0xFF54
+    KEY_F1 = 0xFFBE
+    KEY_F2 = 0xFFBF
+    KEY_F3 = 0xFFC0
+    KEY_F4 = 0xFFC1
+    KEY_F5 = 0xFFC2
+    KEY_F6 = 0xFFC3
+    KEY_F7 = 0xFFC4
+    KEY_F8 = 0xFFC5
+    KEY_F9 = 0xFFC6
+    KEY_F10 = 0xFFC7
+    KEY_F11 = 0xFFC8
+    KEY_F12 = 0xFFC9
+    KEY_SHIFT_LEFT = 0xFFE1
+    KEY_SHIFT_RIGHT = 0xFFE2
+    KEY_CONTROL_LEFT = 0xFFE3
+    KEY_CONTROL_RIGHT = 0xFFE4
+    KEY_META_LEFT = 0xFFE7
+    KEY_META_RIGHT = 0xFFE8
+    KEY_ALT_LEFT = 0xFFE9
+    KEY_ALT_RIGHT = 0xFFEA
+
     def __init__(self, url, port=5900, password=None):
         self.__url = url
         self.__port = port
