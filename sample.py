@@ -4,7 +4,7 @@ import time
 from python_vnc_client.vnc import Vnc
 
 def main():
-    vnc = Vnc("localhost", 5900, "!QAZxsw2")
+    vnc = Vnc("localhost", 5900, "!QAZxsw2", force_protocol_33=False)
     try:
         vnc.connect()
         image = vnc.capture_screen(False)

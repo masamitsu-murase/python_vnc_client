@@ -14,10 +14,15 @@ class _VncReceiveThread(threading.Thread):
     def run(self):
         self.vnc.receive_message()
 
+class VncError(RuntimeError):
+    pass
+
 class Vnc(object):
     VERSION_PATTERN = re.compile(br"^RFB ([0-9]{3}\.[0-9]{3})" + b"\n$")
-    KNOWN_VERSIONS = (b"003.008",)
-    CLIENT_VERSION = b"003.008"
+    KNOWN_VERSIONS_33 = (b"003.003", b"003.007", b"003.008", b"004.000")
+    KNOWN_VERSIONS_38 = (b"003.008", b"004.000")
+    CLIENT_VERSION_33 = b"003.003"
+    CLIENT_VERSION_38 = b"003.008"
 
     SECURITY_TYPE_NONE = 1
     SECURITY_TYPE_VNC = 2
@@ -65,7 +70,7 @@ class Vnc(object):
     KEY_ALT_LEFT = 0xFFE9
     KEY_ALT_RIGHT = 0xFFEA
 
-    def __init__(self, url, port=5900, password=None):
+    def __init__(self, url, port=5900, password=None, shared=False, force_protocol_33=False):
         self._url = url
         self._port = port
         self._password = password
@@ -77,6 +82,11 @@ class Vnc(object):
         self._server_name = ""
         self._receive_thread = None
         self._framebuffer_request = False
+        if shared:
+            self._shared = 1
+        else:
+            self._shared = 0
+        self._force_protocol_33 = force_protocol_33
 
         self.__state = "init"
 
@@ -90,29 +100,49 @@ class Vnc(object):
 
     def connect(self):
         if self._socket is not None:
-            raise RuntimeError("socket is already opened.")
+            raise VncError("socket is already opened.")
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.connect((self._url, self._port))
 
+        # version
         version = self.recv(12)
         match_data = re.match(self.VERSION_PATTERN, version)
-        if not match_data or match_data.group(1) not in self.KNOWN_VERSIONS:
-            raise RuntimeError("Unknown RFB Protocol version")
-        self.send(b"RFB " + self.CLIENT_VERSION + b"\n")
+        if match_data is None:
+            raise VncError("Unsupported RFB Protocol version")
+        if match_data.group(1) in self.KNOWN_VERSIONS_38 and self._force_protocol_33 == False:
+            self.send(b"RFB " + self.CLIENT_VERSION_38 + b"\n")
+            self.handshake_38()
+        elif match_data.group(1) in self.KNOWN_VERSIONS_33:
+            self.send(b"RFB " + self.CLIENT_VERSION_33 + b"\n")
+            self.handshake_33()
+        else:
+            raise VncError("Unknown RFB Protocol version")
 
+        # ClientInit
+        self.send(struct.pack("B", self._shared))
+        # ServerInit
+        server_init = self.recv(20)
+        self.parse_server_init(server_init)
+        self._server_name = self.receive_string()
+
+        self.__state = "connected"
+        self.start_receive_thread()
+        self.update_whole_framebuffer(False)
+
+    def handshake_38(self):
         # Security Type.
         (count, ) = struct.unpack("B", self.recv(1))
         if count == 0:
             reason = self.receive_string()
-            raise RuntimeError("Connection refused: %s" % reason)
+            raise VncError("Connection refused: %s" % reason)
         security_types = struct.unpack("%dB" % count, self.recv(count))
         if self._password is None:
             if self.SECURITY_TYPE_NONE not in security_types:
-                raise RuntimeError("Security type 'None' is not supported by the server.")
+                raise VncError("Security type 'None' is not supported by the server.")
             self._security_type = self.SECURITY_TYPE_NONE
         else:
             if self.SECURITY_TYPE_VNC not in security_types:
-                raise RuntimeError("Security type VNC is not supported by the server.")
+                raise VncError("Security type VNC is not supported by the server.")
             self._security_type = self.SECURITY_TYPE_VNC
         self.send(struct.pack("B", self._security_type))
 
@@ -123,36 +153,13 @@ class Vnc(object):
             response = self.encrypt(self._password, challenge)
             self.send(response)
         else:
-            raise NotImplementedError()
+            raise VncError("This security type is not supported.")
         (security_result, ) = struct.unpack(">L", self.recv(4))
         if security_result != self.SECURITY_RESULT_OK:
             reason = self.receive_string()
-            raise RuntimeError("Authentication Failed: %s" % reason)
+            raise VncError("Authentication Failed: %s" % reason)
 
-        # ClientInit
-        shared = 0
-        self.send(struct.pack("B", shared))
-        # ServerInit
-        server_init = self.recv(20)
-        self.parse_server_init(server_init)
-        self._server_name = self.receive_string()
-
-        self.__state = "connected"
-        self.start_receive_thread()
-        self.update_whole_framebuffer(False)
-
-    def connect_old(self):
-        if self._socket is not None:
-            raise RuntimeError("socket is already opened.")
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.connect((self._url, self._port))
-
-        version = self.recv(12)
-        match_data = re.match(self.VERSION_PATTERN, version)
-        if not match_data or match_data.group(1) not in self.KNOWN_VERSIONS:
-            raise RuntimeError("Unknown RFB Protocol version")
-        self.send(b"RFB " + b"003.003" + b"\n")
-
+    def handshake_33(self):
         # Security Type.
         (security_type, ) = struct.unpack(">L", self.recv(4))
         self._security_type = security_type
@@ -168,19 +175,7 @@ class Vnc(object):
         (security_result, ) = struct.unpack(">L", self.recv(4))
         if security_result != self.SECURITY_RESULT_OK:
             reason = self.receive_string()
-            raise RuntimeError("Authentication Failed: %s" % reason)
-
-        # ClientInit
-        shared = 0
-        self.send(struct.pack("B", shared))
-        # ServerInit
-        server_init = self.recv(20)
-        self.parse_server_init(server_init)
-        self._server_name = self.receive_string()
-
-        self.__state = "connected"
-        self.start_receive_thread()
-        self.update_whole_framebuffer(False)
+            raise VncError("Authentication Failed: %s" % reason)
 
     def close(self):
         if self._socket:
@@ -219,18 +214,18 @@ class Vnc(object):
 
     def send(self, packet):
         if self._socket is None:
-            raise RuntimeError("socket is closed.")
+            raise VncError("socket is closed.")
         totalsent = 0
         length = len(packet)
         while totalsent < length:
             sent = self._socket.send(packet[totalsent:])
             if sent == 0:
-                raise RuntimeError("socket is broken")
+                raise VncError("socket is broken")
             totalsent += sent
 
     def recv(self, length):
         if self._socket is None:
-            raise RuntimeError("socket is closed.")
+            raise VncError("socket is closed.")
         totalreceived = 0
         received_data = b""
         while totalreceived < length:
@@ -238,7 +233,7 @@ class Vnc(object):
             if chunk == b"":
                 if self.__state == "closing":
                     return None
-                raise RuntimeError("socket is broken.")
+                raise VncError("socket is broken.")
             received_data += chunk
             totalreceived += len(chunk)
         return received_data
@@ -372,7 +367,7 @@ class Vnc(object):
         elif self._bits_per_pixel == 32:
             ctype = ctypes.c_uint32
         else:
-            raise RuntimeError("Unsupported bits-per-pixel")
+            raise VncError("Unsupported bits-per-pixel")
 
         bit_count = {
             0x01: 1,
