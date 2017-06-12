@@ -3,6 +3,7 @@ import socket
 import re
 import struct
 import threading
+import time
 import ctypes
 from . import pydes
 
@@ -256,6 +257,11 @@ class Vnc(object):
     def key_up(self, key):
         self.key_event(key, 0)
 
+    def key_input(self, key, interval=0.1):
+        self.key_down(key)
+        time.sleep(interval)
+        self.key_up(key)
+
     def key_event(self, key, down):
         if isinstance(key, str):
             key = ord(key)
@@ -344,7 +350,7 @@ class Vnc(object):
         (reason_length, ) = struct.unpack(">L", self.recv(4))
         reason_str = ""
         if reason_length > 0:
-            reason_str = struct.unpack("%ds" % reason_length, self.recv(reason_length))
+            (reason_str, ) = struct.unpack("%ds" % reason_length, self.recv(reason_length))
         return reason_str
 
     def parse_server_init(self, server_init):
