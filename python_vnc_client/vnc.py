@@ -98,6 +98,18 @@ class Vnc(object):
     def server_name(self):
         return self._server_name
 
+    @property
+    def red_max(self):
+        return self._red_max
+
+    @property
+    def green_max(self):
+        return self._green_max
+
+    @property
+    def blue_max(self):
+        return self._blue_max
+
     def connect(self):
         if self._socket is not None:
             raise VncError("socket is already opened.")
