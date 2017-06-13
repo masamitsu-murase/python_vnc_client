@@ -300,7 +300,10 @@ class Vnc(object):
 
     def receive_message(self):
         while True:
-            data = self.recv(1)
+            try:
+                data = self.recv(1)
+            except socket.error:
+                data = None
             if data is None:
                 break
             (message_type, ) = struct.unpack("B", data)
