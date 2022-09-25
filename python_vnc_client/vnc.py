@@ -267,6 +267,25 @@ class Vnc(object):
             key = ord(key)
         packet = struct.pack(">BBxxL", 4, down, key)
         self.send(packet)
+    
+    def mouse_event(self, event="Left", position=(0, 0),duration=0.1):
+        # Left 1, Middle 2, Right 3,
+        button_id = None
+        if event == "Left":
+            button_id = 1
+        elif event == "Middle":
+            button_id = 2
+        elif event == "Right":
+            button_id = 4
+
+        self.pointer_event(position[0], position[1], 0)
+        self.pointer_event(position[0], position[1], button_id)
+        time.sleep(duration)
+        self.pointer_event(position[0], position[1], 0)
+        
+    def pointer_event(self,x,y,buttonmask):
+        packet = struct.pack("!BBHH", 5, buttonmask, x, y)
+        self.send(packet)
 
     def capture_screen(self, force_update=False):
         if force_update:
